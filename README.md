@@ -1,134 +1,261 @@
 # CarND-Path-Planning-Project
 Self-Driving Car Engineer Nanodegree Program
-   
-### Simulator. You can download the Term3 Simulator BETA which contains the Path Planning Project from the [releases tab](https://github.com/udacity/self-driving-car-sim/releases).
 
-In this project your goal is to safely navigate around a virtual highway with other traffic that is driving +-10 MPH of the 50 MPH speed limit. You will be provided the car's localization and sensor fusion data, there is also a sparse map list of waypoints around the highway. The car should try to go as close as possible to the 50 MPH speed limit, which means passing slower traffic when possible, note that other cars will try to change lanes too. The car should avoid hitting other cars at all cost as well as driving inside of the marked road lanes at all times, unless going from one lane to another. The car should be able to make one complete loop around the 6946m highway. Since the car is trying to go 50 MPH, it should take a little over 5 minutes to complete 1 loop. Also the car should not experience total acceleration over 10 m/s^2 and jerk that is greater than 50 m/s^3.
+## Purpose
+The purpose of this project is to create a planner for a simulated car to navigate high way conditions with random cars driving in random locations at random speeds.  This is implemented using C++.
 
-#### The map of the highway is in data/highway_map.txt
-Each waypoint in the list contains  [x,y,s,dx,dy] values. x and y are the waypoint's map coordinate position, the s value is the distance along the road to get to that waypoint in meters, the dx and dy values define the unit normal vector pointing outward of the highway loop.
+## Strategy
+This project was conducted in many steps, trials and errors.  It was and is a very difficult project for me to complete.  Here is the story of my discovering on how I went about doing this project.  I went about two different routes in completing this project.  Initially prior to being receiving the walkthrough video via youtube.  I spent two weeks getting my JMT version functioning.  I basically fed into this JMT the start_s, start_velocity, start_acceleration and also the end_s, end_velocity, and end_acceleration.  I also gave it a time interval T which I initially set to about 2 and tweaked up up and down.  This was repeated for also the d parameter.  
 
-The highway's waypoints loop around so the frenet s value, distance along the road, goes from 0 to 6945.554.
+```
+vector<double> JMT(vector<double> start, vector <double> end, double T) {
+    MatrixXd A = MatrixXd(3, 3);
+    double T_2 = T*T;
+    double T_3 = T_2*T;
+    double T_4 = T_2*T_2;
+    double T_5 = T_3*T_2;
 
-## Basic Build Instructions
+	A <<   T_3,   T_4,    T_5,
+			 3*T_2, 4*T_3,  5*T_4,
+			 6*T,  12*T_2, 20*T_3;
 
-1. Clone this repo.
-2. Make a build directory: `mkdir build && cd build`
-3. Compile: `cmake .. && make`
-4. Run it: `./path_planning`.
+	MatrixXd B = MatrixXd(3,1);
+	B << end[0]-(start[0] + start[1] * T + .5*start[2]*T_2),
+			 end[1]-(start[1] + start[2] * T),
+			 end[2]- start[2];
 
-Here is the data provided from the Simulator to the C++ Program
+	MatrixXd Ai = A.inverse();
 
-#### Main car's localization Data (No Noise)
+	MatrixXd C = Ai*B;
 
-["x"] The car's x position in map coordinates
+	vector <double> result = {start[0], start[1], 0.5*start[2]};
+	for(int i = 0; i < C.size(); i++) {
+	    result.push_back(C.data()[i]);
+	}
+  return result;
+}
+```
+Then the this equation was calculated and the s and d value were calculated for each time increment of 0.02.  Then these were converted into XY coordinates and added to the list of points for the car to travel to and about.  And it was almost working but not very robust.  Also it was not able to loop the tracks correctly.  What I mean is that after about 6945, the s values restart at 0, and this for some reason was having trouble doing that.
 
-["y"] The car's y position in map coordinates
+```
+// calculate a polynomial equation
+double calc_equation(vector<double> coefficients, double T) {
+  /*
+  Takes the coefficients of a polynomial and creates a function of
+  time from them.
+  */
+  double total = 0.0;
+  for (double i=0; i<coefficients.size(); i++) {
+    total += coefficients[i]*pow(T,i);
+  }
+  return total;
+}
 
-["s"] The car's s position in frenet coordinates
+vector<double> differentiate(vector<double> coefficients){
+  /*
+  Calculates the derivative of a polynomial and returns
+  the corresponding coefficients.
+  */
+  vector<double> new_cos;
+  new_cos.clear();
+  for (double i = 1.0; i<coefficients.size(); i++) {
+    new_cos.push_back(i*coefficients[i]);
+  }
+  return new_cos;
+}
+```
 
-["d"] The car's d position in frenet coordinates
+Also by using the above method, somehow there would be some non smooth velocity and acceleration spikes in random parts of the track.  So, for some reason it just wasn't smooth.
 
-["yaw"] The car's yaw angle in the map
+Anyhow, before I even got to implementing JMT, I first downloaded and installed the simulator and got the workspace working.  Then I figured out how to first move the car down the road by simply increasing the s values while keeping the d values fixed.  I decided to start off implementing the JMT and PTG functions as shown above.
 
-["speed"] The car's speed in MPH
+My initial approach was too complicated.  I initially tried to randomly choose different spots and calculate the cost of each trajectory and have it choose the best cost.  This resulted in having the car teleport around in random directions.  Then I figured i should just simplify this and just try to have the car move straight using the JMT function you see above.  But even this proved challenging, it wasn't moving smoothly.  
 
-#### Previous path data given to the Planner
+Then, after reading forums, I was able to find a way to have the car move straight in one lane using the JMT method.  Then I decided to see how to make this car change lanes.  So, i built cost functions around simply just choosing 3 different trajectories one for left, right and middle (I would later use these same cost functions when I changed the trajectory generation).
 
-//Note: Return the previous list but with processed points removed, can be a nice tool to show how far along
-the path has processed since last time. 
+I created a speed cost, in such a way that if a car in a neighboring lane is moving faster then my car would more prefer to be in that lane.  I also created a distance cost where if there was more space in the front in a neighboring lane, then the car would prefer to be in that lane.  I also created a "bubble cost" where if there were some cars both in front and behind my car in a neighboring lane are within a certain BUBBLE_DIST of 20 meters, then the car will extremely prefer NOT to be in those lanes.  I also added a small lane change cost so that the car does not enjoy driving like a daredevil and changing lanes all the time.
 
-["previous_path_x"] The previous list of x points previously given to the simulator
+These costs are calculated in the cost functions shown below:
 
-["previous_path_y"] The previous list of y points previously given to the simulator
+```
+// here is the lane change cost
+if ((left_move ==1) || (right_move==1)) {
+  total_cost += LANE_WEIGHT;
+}
+//cout << "total cost after lane weight: " << total_cost << endl;
 
-#### Previous path's end s and d values 
+// here is the speed limit costs
+if (front_car_speed > SPEED_LIMIT) {
+  total_cost += 0;
+} else {
+  total_cost += SPEED_WEIGHT*((SPEED_LIMIT-front_car_speed)/SPEED_LIMIT);
+}
+//cout << "total cost after speed weight: " << total_cost << endl;
 
-["end_path_s"] The previous list's last point's frenet s value
+// here is the distance costs
+double FAR_SPACE = 120.0;
+if (front_car_dist > FAR_SPACE) {
+  total_cost += 0;
+} else if (front_car_dist <= FAR_SPACE && front_car_dist > 0){
+  total_cost += DISTANCE_WEIGHT*((FAR_SPACE-front_car_dist)/FAR_SPACE);
+} else {
+  total_cost += 0;
+}
 
-["end_path_d"] The previous list's last point's frenet d value
+// Here is my collision protection costs
+// this kicks in only if a left or right move is detected
+if (left_move == 1 || right_move == 1) {
+  for (auto v : predictions) {
+    double v_s = v[5];
+    double v_lane = check_lane(v[6]);
+    double v_speed = calc_speed(v);
+    // predict future car position
+    double v_future_s = v_s + (double)prev_path_size*time_inc*v_speed;
+    double v_dist = abs(calc_dist(v_future_s, my_car_s));
 
-#### Sensor Fusion Data, a list of all other car's attributes on the same side of the road. (No Noise)
+    if ( (v_lane+1 == my_lane) && left_move == 1 && v_dist < BUBBLE_DIST) {
+      //cout << "I shoudln't turn left" << endl;
+      total_cost += 99.0;
+      //cout << "this is total cost in not turn left: " << total_cost << endl;
 
-["sensor_fusion"] A 2d vector of cars and then that car's [car's unique ID, car's x position in map coordinates, car's y position in map coordinates, car's x velocity in m/s, car's y velocity in m/s, car's s position in frenet coordinates, car's d position in frenet coordinates. 
+    } else if ( (v_lane-1 == my_lane) && right_move == 1 && v_dist < BUBBLE_DIST) {
+      //cout << "I shoudln't turn right" << endl;
+      total_cost += 99.0;
+      //cout << "this is total cost in not turn right: " << total_cost << endl;
 
-## Details
+    } else {
+      total_cost += 0;
+    }
+  }
+}
 
-1. The car uses a perfect controller and will visit every (x,y) point it recieves in the list every .02 seconds. The units for the (x,y) points are in meters and the spacing of the points determines the speed of the car. The vector going from a point to the next point in the list dictates the angle of the car. Acceleration both in the tangential and normal directions is measured along with the jerk, the rate of change of total Acceleration. The (x,y) point paths that the planner recieves should not have a total acceleration that goes over 10 m/s^2, also the jerk should not go over 50 m/s^3. (NOTE: As this is BETA, these requirements might change. Also currently jerk is over a .02 second interval, it would probably be better to average total acceleration over 1 second and measure jerk from that.
-
-2. There will be some latency between the simulator running and the path planner returning a path, with optimized code usually its not very long maybe just 1-3 time steps. During this delay the simulator will continue using points that it was last given, because of this its a good idea to store the last points you have used so you can have a smooth transition. previous_path_x, and previous_path_y can be helpful for this transition since they show the last points given to the simulator controller with the processed points already removed. You would either return a path that extends this previous path or make sure to create a new path that has a smooth transition with this last path.
-
-## Tips
-
-A really helpful resource for doing this project and creating smooth trajectories was using http://kluge.in-chemnitz.de/opensource/spline/, the spline function is in a single hearder file is really easy to use.
-
----
-
-## Dependencies
-
-* cmake >= 3.5
- * All OSes: [click here for installation instructions](https://cmake.org/install/)
-* make >= 4.1
-  * Linux: make is installed by default on most Linux distros
-  * Mac: [install Xcode command line tools to get make](https://developer.apple.com/xcode/features/)
-  * Windows: [Click here for installation instructions](http://gnuwin32.sourceforge.net/packages/make.htm)
-* gcc/g++ >= 5.4
-  * Linux: gcc / g++ is installed by default on most Linux distros
-  * Mac: same deal as make - [install Xcode command line tools]((https://developer.apple.com/xcode/features/)
-  * Windows: recommend using [MinGW](http://www.mingw.org/)
-* [uWebSockets](https://github.com/uWebSockets/uWebSockets)
-  * Run either `install-mac.sh` or `install-ubuntu.sh`.
-  * If you install from source, checkout to commit `e94b6e1`, i.e.
-    ```
-    git clone https://github.com/uWebSockets/uWebSockets 
-    cd uWebSockets
-    git checkout e94b6e1
-    ```
-
-## Editor Settings
-
-We've purposefully kept editor configuration files out of this repo in order to
-keep it as simple and environment agnostic as possible. However, we recommend
-using the following settings:
-
-* indent using spaces
-* set tab width to 2 spaces (keeps the matrices in source code aligned)
-
-## Code Style
-
-Please (do your best to) stick to [Google's C++ style guide](https://google.github.io/styleguide/cppguide.html).
-
-## Project Instructions and Rubric
-
-Note: regardless of the changes you make, your project must be buildable using
-cmake and make!
+```
 
 
-## Call for IDE Profiles Pull Requests
+Anyway, this JMT method sometimes make it all the way to the end.  But sometimes, it won't make it all the way because the path wasn't smooth.  So, now i spent many hours and days tweaking speed and time frame (parameter T for the JMT function) and play around with the cost functions to see if this would allow my car friend to make it to the goal.  And of course none of these worked very robustly.  There would also be some stretch that would cause the car to fail.  Not to mention that sometimes some random car will swurve in front of my car and brake and there's almost no way i could recover from that.  
 
-Help your fellow students!
+I also found that I would hit a brick wall near the max_s = 6945.554; it will wrap back to zero.  I implemented a modulus to try to fix this:
 
-We decided to create Makefiles with cmake to keep this project as platform
-agnostic as possible. Similarly, we omitted IDE profiles in order to ensure
-that students don't feel pressured to use one IDE or another.
+```
+/*
+double wrap_distance(double s_input) {
+    return s_input - max_s*floor(s_input/max_s);
+} */
+```
 
-However! I'd love to help people get up and running with their IDEs of choice.
-If you've created a profile for an IDE that you think other students would
-appreciate, we'd love to have you add the requisite profile files and
-instructions to ide_profiles/. For example if you wanted to add a VS Code
-profile, you'd add:
+But it still didn't work.  So, then the strategy was to take a break from this project after I heard udacity was going to give out some cool pointers!  So, I took some days break until udacity released a walkthrough video which described a totally different method which I used.
 
-* /ide_profiles/vscode/.vscode
-* /ide_profiles/vscode/README.md
+So, in this method proposed by udacity.  The core idea is we want to change the global coordinates to vehicle local coordinates.  And instead of using the JMT, they use this spline tool to generate the trajectory.  So, here is the example of transforming to local vehicle coordinates:
 
-The README should explain what the profile does, how to take advantage of it,
-and how to install it.
+```
+// convert to car coordinate system
+for(int i = 0; i<value_size; i++) {
+  // find the delta between current pos(x,y) and way point(x,y)
+  double dx = x_val[i] - start_x;
+  double dy = y_val[i] - start_y;
+  // calculate new wavepoint position relative to current point
+  x_val[i] = dx*cos(start_yaw) + dy*sin(start_yaw);
+  y_val[i] = dy*cos(start_yaw) - dx*sin(start_yaw);
+}
+```
 
-Frankly, I've never been involved in a project with multiple IDE profiles
-before. I believe the best way to handle this would be to keep them out of the
-repo root to avoid clutter. My expectation is that most profiles will include
-instructions to copy files to a new location to get picked up by the IDE, but
-that's just a guess.
+We then create three way points about 30m apart (SPACING=30).  Note that here lane 0 is left lane, lane 1 is middle lane and lane 2 is the right lane.  And depending on the lane number the car will go to that lane in terms of d position coordinates:
 
-One last note here: regardless of the IDE used, every submitted project must
-still be compilable with cmake and make./
+```
+vector<double> waypt1 = getXY(car_s+SPACING, (2.0+4.0*(double)lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+vector<double> waypt2 = getXY(car_s+SPACING*2, (2.0+4.0*(double)lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+vector<double> waypt3 = getXY(car_s+SPACING*3, (2.0+4.0*(double)lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+
+```
+
+We then make use of their favorite spline tool and add points in between these way points spaced perfectly apart in a way not to violate speed limit.  In this manner, we do not have to have a speed or acceleration cost functions since the speed and acceleration is limited by how we have already spaced out these points:
+
+```
+tk::spline s;
+
+s.set_points(x_val, y_val);
+
+vector<double> next_x_vals;
+vector<double> next_y_vals;
+
+// initialize next x and y vals  with previous path points
+for (int i = 0; i< previous_path_x.size(); i++) {
+  next_x_vals.push_back(previous_path_x[i]);
+  next_y_vals.push_back(previous_path_y[i]);
+}
+
+// break up previous path points to achieve correct velocity
+double x_targ = 30.0;
+double y_targ = s(x_targ);
+double dist_targ = sqrt((x_targ*x_targ)+(y_targ*y_targ));
+
+double x_inc = 0;
+
+// fill out the planner with new points
+for (int i = 1; i <= 50-previous_path_x.size(); i++) {
+
+  double N = (dist_targ/(0.02*v_targ));   // speed limit is in m/s
+  double x_point = x_inc + (x_targ)/N;
+  double y_point = s(x_point);
+
+  x_inc = x_point;
+
+  double x_ref = x_point;
+  double y_ref = y_point;
+
+  x_point = (x_ref * cos(start_yaw)-y_ref*sin(start_yaw));
+  y_point = (x_ref*sin(start_yaw)+y_ref*cos(start_yaw));
+
+  x_point += start_x;
+  y_point += start_y;
+
+  next_x_vals.push_back(x_point);
+  next_y_vals.push_back(y_point);
+}
+```
+
+Note that near the end shift it back to global coordinates before pushing back to the next_x_vals and next_y_vals lists.  This method provided more robust for the simulator and gave pretty smooth driving.  Therefore, I took this method and implemented my cost functions as described above to this method and the car is able to not only finish the track by also even reached up to 19.56 miles since it's running while I am writing this file.
+
+The other neat trick was how we would slow the car down and start the car up slowly.  This was implemented in the update_velocity function:
+
+```
+void update_velocity(double car_s, vector<double> front_car, int prev_path_size, double time_inc) {
+  if (front_car[0] != -1) {
+    double front_car_s = front_car[5];
+    double front_car_speed = calc_speed(front_car);
+    // predict future car position
+    double front_car_future_s = front_car_s + (double)prev_path_size*time_inc*front_car_speed;
+    double front_car_dist = calc_dist(front_car_future_s, car_s);
+
+    cout << "here is front car speed: " << front_car_speed << endl;
+    cout << "here is front car future s: " << front_car_future_s << endl;
+    if (front_car_dist >0 && (front_car_dist)<BUFFER_ZONE) {
+      warning = true;
+    } else {
+      warning = false;
+    }
+    cout << "here is my target velocity: " << v_targ << endl;
+  } else {
+    warning = false;
+  }
+
+  if (warning) {
+    v_targ -= 0.1;
+  } else if (v_targ < SPEED_LIMIT-.1) {
+    v_targ += 0.1;
+  }
+}
+```
+
+Here we create this cool variable called warning where if we are too close to a vehicle then we will decrease the target velocity.  If we are too far then increase the target velocity until the speed limit was hit.  The units here is in meters per second.  Also note that by initializing the  v_targ to 0, we fix also the issue of accelerating from 0 to 47mph without any jerk.
+
+## Conclusion
+
+The car is able to drive around 47mph max since I made that the limit so we have some buffer zone before going over the speed limit.  Also, we should be promoting safe driving so that if there are any kids watching this they won't learn to drive fast.  :)
+
+The car is also able to change lanes to a more empty lane.  It also stays within the lane bounds.  There are also no velocity/acceleration/jerk issues.  It is also able to go more than 4.3 miles without any incident, in fact I have seen it go up to 19.56 miles.  Therefore I consider this project a success and a very good experience.  I really learned a lot doing this project and would like to also give a special thanks to udacity for the guidance to help me finish this project.
+
+
+## Future Work and possible incidents
+
+In some random or rare occasion, possible issues would arise if a car cut my car off and braked.  Or if another car swurves into my lane while my car is there.  Or if I change lanes at the same time another car changes lanes.  I think fixing these issues 100% perfect is beyond the scope of this course.  But it should be one that should be thoroughly investigated especially if using this code in a real car.  
